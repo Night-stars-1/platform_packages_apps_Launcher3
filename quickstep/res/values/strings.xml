@@ -441,4 +441,6 @@
     </string>
     <!-- Description for the Ambient Cue accessibility action label for autofilling. [CHAR LIMIT=NONE] -->
     <string name="ambient_cue_autofill_action">autofill</string>
+    <!-- Label of the top-right drop target shown while swiping an app up; releasing on it turns the app into a Moment floating window. [CHAR LIMIT=12] -->
+    <string name="moment_drop_target_label">Float</string>
 </resources>

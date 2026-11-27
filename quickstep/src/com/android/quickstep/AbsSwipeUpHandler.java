@@ -15,6 +15,7 @@
  */
 package com.android.quickstep;
 
+import static android.app.ActivityTaskManager.INVALID_TASK_ID;
 import static android.app.WindowConfiguration.ACTIVITY_TYPE_HOME;
 import static android.app.WindowConfiguration.WINDOWING_MODE_FREEFORM;
 import static android.view.Surface.ROTATION_0;
@@ -153,6 +154,7 @@ import com.android.quickstep.util.AnimatorControllerWithResistance;
 import com.android.quickstep.util.ContextInitListener;
 import com.android.quickstep.util.InputConsumerProxy;
 import com.android.quickstep.util.InputProxyHandlerFactory;
+import com.android.quickstep.util.MomentGestureDropTarget;
 import com.android.quickstep.util.MotionPauseDetector;
 import com.android.quickstep.util.RecentsOrientedState;
 import com.android.quickstep.util.RectFSpringAnim;
@@ -358,6 +360,8 @@ public abstract class AbsSwipeUpHandler<
     private boolean mGestureStarted;
     private boolean mLogDirectionUpOrLeft = true;
     private boolean mIsLikelyToStartNewTask;
+    // Task to convert into a Moment floating window once the gesture resumes it, if any.
+    private int mMomentConvertTaskId = INVALID_TASK_ID;
 
     private final int mSplashMainWindowShiftLength;
 
@@ -1271,6 +1275,27 @@ public abstract class AbsSwipeUpHandler<
             mRecentsView.runOnPageScrollsInitialized(handleNormalGestureEndCallback);
         } else {
             handleNormalGestureEndCallback.run();
+        }
+    }
+
+    /**
+     * Ends the gesture by returning to the running task, then converting that task into a Moment
+     * floating window once the recents transition has finished.
+     */
+    @UiThread
+    public void onGestureEndedToMoment(int taskId) {
+        mMomentConvertTaskId = taskId;
+        mStateCallback.setStateOnUiThread(STATE_GESTURE_COMPLETED);
+        Runnable handleGestureEndCallback = () -> handleNormalGestureEnd(
+                /* endVelocityPxPerMs= */ 0,
+                /* isFling= */ false,
+                /* velocityPxPerMs= */ new PointF(),
+                /* isCancel= */ true,
+                /* horizontalTouchSlopPassed= */ false);
+        if (mRecentsView != null) {
+            mRecentsView.runOnPageScrollsInitialized(handleGestureEndCallback);
+        } else {
+            handleGestureEndCallback.run();
         }
     }
 
@@ -2358,12 +2383,18 @@ public abstract class AbsSwipeUpHandler<
             ActiveGestureProtoLogProxy.logEarlyExitForCanceledAnimation("resumeLastTask");
             return;
         }
+        int momentTaskId = mMomentConvertTaskId;
+        mMomentConvertTaskId = INVALID_TASK_ID;
+        Runnable convertToMoment = momentTaskId == INVALID_TASK_ID ? null
+                : () -> MomentGestureDropTarget.convertTaskToMoment(momentTaskId);
         if (mRecentsAnimationController != null) {
             mRecentsAnimationController.finish(
                     /* toHome= */ false,
-                    /* onFinishComplete= */ null,
+                    /* onFinishComplete= */ convertToMoment,
                     /* reason= */ new ActiveGestureLog.CompoundString(
                             "AbsSwipeUpHandler.resumeLastTask"));
+        } else if (convertToMoment != null) {
+            convertToMoment.run();
         }
         doLogGesture(LAST_TASK, null);
         reset();

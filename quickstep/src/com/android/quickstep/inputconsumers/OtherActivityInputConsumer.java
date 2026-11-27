@@ -62,6 +62,7 @@ import com.android.quickstep.TaskAnimationManager;
 import com.android.quickstep.util.ActiveGestureLog;
 import com.android.quickstep.util.ActiveGestureProtoLogProxy;
 import com.android.quickstep.util.CachedEventDispatcher;
+import com.android.quickstep.util.MomentGestureDropTarget;
 import com.android.quickstep.util.MotionPauseDetector;
 import com.android.quickstep.util.NavBarPosition;
 import com.android.systemui.shared.system.InputChannelCompat.InputEventReceiver;
@@ -128,6 +129,9 @@ public class OtherActivityInputConsumer extends ContextWrapper implements InputC
 
     // The callback called upon finishing the recents transition if it was force-canceled
     private Runnable mForceFinishRecentsTransitionCallback;
+
+    // Top-right "convert to Moment" drop target; only non-null while shown for this gesture.
+    private MomentGestureDropTarget mMomentDropTarget;
 
     public OtherActivityInputConsumer(
             Context base,
@@ -376,7 +380,15 @@ public class OtherActivityInputConsumer extends ContextWrapper implements InputC
                             mStartDisplacement = -mTouchSlop;
                         }
                         notifyGestureStarted(isLikelyToStartNewTask);
+                        if (mInteractionHandler != null && mDeviceState.isFullyGesturalNavMode()) {
+                            mMomentDropTarget = MomentGestureDropTarget.maybeShow(
+                                    this, mGestureState);
+                        }
                     }
+                }
+
+                if (mMomentDropTarget != null) {
+                    mMomentDropTarget.updateTouch(mLastPos.x, mLastPos.y);
                 }
 
                 if (mInteractionHandler != null) {
@@ -390,8 +402,11 @@ public class OtherActivityInputConsumer extends ContextWrapper implements InputC
                         boolean minSwipeMet = upDist >= Math.max(mMotionPauseMinDisplacement,
                                 mInteractionHandler.getThresholdToAllowMotionPause());
                         mInteractionHandler.setCanSlowSwipeGoHome(minSwipeMet);
+                        // Don't trigger the overview pause while hovering the Moment drop target.
                         mMotionPauseDetector.setDisallowPause(!minSwipeMet
-                                || isLikelyToStartNewTask);
+                                || isLikelyToStartNewTask
+                                || (mMomentDropTarget != null
+                                        && mMomentDropTarget.isHighlighted()));
                         mMotionPauseDetector.addPosition(ev);
                         mInteractionHandler.setIsLikelyToStartNewTask(isLikelyToStartNewTask);
                     }
@@ -485,6 +500,10 @@ public class OtherActivityInputConsumer extends ContextWrapper implements InputC
         if (mPassedWindowMoveSlop && mInteractionHandler != null) {
             if (isCanceled) {
                 mInteractionHandler.onGestureCancelled();
+            } else if (mMomentDropTarget != null && mMomentDropTarget.isHighlighted()) {
+                // Released on the Moment drop target: bring the app back and float it.
+                mInteractionHandler.updateDisplacement(getDisplacement(ev) - mStartDisplacement);
+                mInteractionHandler.onGestureEndedToMoment(mMomentDropTarget.getTaskId());
             } else {
                 mVelocityTracker.computeCurrentVelocity(PX_PER_MS);
                 float velocityXPxPerMs = mVelocityTracker.getXVelocity(mActivePointerId);
@@ -537,6 +556,7 @@ public class OtherActivityInputConsumer extends ContextWrapper implements InputC
     }
 
     private void cleanupAfterGesture() {
+        dismissMomentDropTarget();
         if (mVelocityTracker != null) {
             mVelocityTracker.recycle();
             mVelocityTracker = null;
@@ -544,6 +564,13 @@ public class OtherActivityInputConsumer extends ContextWrapper implements InputC
         mMotionPauseDetector.clear();
         // Clear ref to recents view and launcher activity on action up or cancel to avoid leak
         mRecentsViewDispatcher.clearConsumerAndCache();
+    }
+
+    private void dismissMomentDropTarget() {
+        if (mMomentDropTarget != null) {
+            mMomentDropTarget.dismiss();
+            mMomentDropTarget = null;
+        }
     }
 
     @Override
@@ -554,6 +581,7 @@ public class OtherActivityInputConsumer extends ContextWrapper implements InputC
     @Override
     public void onConsumerAboutToBeSwitched() {
         Preconditions.assertUIThread();
+        dismissMomentDropTarget();
         if (mInteractionHandler != null) {
             // The consumer is being switched while we are active. Set up the shared state to be
             // used by the next animation
